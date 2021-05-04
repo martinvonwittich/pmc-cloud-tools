@@ -47,6 +47,48 @@ END
 	exit
 }
 
+function required_perf_events()
+{
+	local event
+	local -A supported_events
+	local -a unsupported_events
+
+	# create a hash of supported events for easy lookup
+	# not quoting the $() here is intentional to run the output of perf
+	# list through wordsplitting
+	for event in $(perf list --raw-dump)
+	do
+		supported_events["$event"]=1
+	done
+
+	# add aliases not reported by perf list --raw-dump
+	if [[ -v supported_events[branch-instructions] ]]; then supported_events[branches]=1; fi
+	if [[ -v supported_events[cpu-cycles] ]]; then supported_events[cycles]=1; fi
+
+	for event in "$@"
+	do
+		if [[ ! -v supported_events["$event"] ]]
+		then
+			unsupported_events+=("$event")
+		fi
+	done
+
+	if [[ "${#unsupported_events[@]}" > 0 ]]
+	then
+		echo "ERROR: your perf(1) doesn't seem to support the following events:" >&2
+		for event in "${unsupported_events[@]}"
+		do
+			echo "  $event" >&2
+		done
+		if [[ "$EUID" != "0" ]]; then
+			echo "root permissions, a more recent kernel and/or direct hardware access might help." >&2
+		else
+			echo "A more recent kernel and/or direct hardware access might help." >&2
+		fi
+		exit 1
+	fi
+}
+
 opt_cpu=0; opt_pid=0; opt_cmd=0; cpu=""; pid=""; cmd=""
 
 while getopts C:p:c:h opt
@@ -78,6 +120,16 @@ if (( opt_pid )); then
 		exit
 	fi
 fi
+
+required_perf_events \
+	cycles \
+	dtlb_load_misses.miss_causes_a_walk \
+	dtlb_store_misses.miss_causes_a_walk \
+	itlb_misses.miss_causes_a_walk \
+	dtlb_load_misses.walk_active \
+	dtlb_store_misses.walk_active \
+	itlb_misses.walk_active \
+	instructions
 
 # note that instructions is last on purpose, it triggers output
 # cycles are twice as a workaround for an issue
